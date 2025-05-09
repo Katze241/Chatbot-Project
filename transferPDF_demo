@@ -1,0 +1,48 @@
+!pip install PyMuPDF
+
+import fitz  # PyMuPDF
+import json
+
+doc = fitz.open("Assignment2_instructions.pdf")
+text = "\n".join([page.get_text() for page in doc])
+
+section_titles = [
+    "Description", "Key Features", "Vehicle System Structure", "Rental Management",
+    "Demonstration and Resources", "Submission Guidelines", "Important"
+]
+
+data = []
+current_section = None
+buffer = []
+
+for line in text.splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    if any(title in line for title in section_titles):
+        if current_section and buffer:
+            data.append((current_section, " ".join(buffer)))
+            buffer = []
+        current_section = line
+    else:
+        buffer.append(line)
+
+if current_section and buffer:
+    data.append((current_section, " ".join(buffer)))
+
+chat_data = []
+for section, content in data:
+    prompt = f"'{section}' 항목에 대해 설명해줘."
+    completion = content.strip()
+    chat_data.append({
+        "messages": [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": completion}
+        ]
+    })
+
+with open("assignment2_chatdata.jsonl", "w", encoding="utf-8") as f:
+    for item in chat_data:
+        f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+print("챗봇 학습용 JSONL 파일 생성 완료")
