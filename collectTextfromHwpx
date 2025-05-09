@@ -1,0 +1,19 @@
+from lxml import etree
+import zipfile
+
+with zipfile.ZipFile("file.hwpx", 'r') as zipf:
+    xml_content = zipf.read('Contents/section0.xml')
+root = etree.fromstring(xml_content)
+
+ns = {'h': 'http://www.hancom.co.kr/hwpml/2010/section'}
+
+all_text_elements = root.xpath('//*[text()]')
+
+all_text_chunks = []
+for elem in all_text_elements:
+    text = elem.text.strip() if elem.text else ''
+    if text:
+        all_text_chunks.append(text)
+
+for i, chunk in enumerate(all_text_chunks[:5]):
+    print(f"[{i+1}] {chunk}")
