@@ -3,12 +3,11 @@
 import fitz  # PyMuPDF
 import json
 
-doc = fitz.open("Assignment2_instructions.pdf")
+doc = fitz.open("pdf 파일명 입력")
 text = "\n".join([page.get_text() for page in doc])
 
 section_titles = [
-    "Description", "Key Features", "Vehicle System Structure", "Rental Management",
-    "Demonstration and Resources", "Submission Guidelines", "Important"
+    "타이틀 입력"
 ]
 
 data = []
@@ -41,7 +40,7 @@ for section, content in data:
         ]
     })
 
-with open("assignment2_chatdata.jsonl", "w", encoding="utf-8") as f:
+with open("PDF파일명_chatdata.jsonl", "w", encoding="utf-8") as f:
     for item in chat_data:
         f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
