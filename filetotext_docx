@@ -1,0 +1,64 @@
+from PIL import Image
+from docx import Document
+from google.colab import files
+from PIL import Image, ImageOps, ImageEnhance
+import pytesseract
+import io
+import os
+
+uploaded = files.upload()
+docx_path = list(uploaded.keys())[0]
+
+def extract_text_from_docx(docx_path):
+    doc = Document(docx_path)
+
+    # 텍스트
+    full_text = []
+    for para in doc.paragraphs:
+        if para.text.strip():
+            full_text.append(para.text.strip())
+
+    print("\n")
+    # 표 (병합된 셀일 경우 병합된 개수만큼 계속해서 텍스트가 출력됨)
+    for table in doc.tables:
+        for row in table.rows:
+            row_text = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            if row_text:
+                full_text.append(" | ".join(row_text))
+
+    # 이미지
+    def preprocess_image_for_ocr(img):
+        # 1. 흑백 변환
+        img = img.convert("L")
+        # 2. 크기 확대 (1.5배)
+        img = img.resize((int(img.width * 1.5), int(img.height * 1.5)))
+        # 3. 대비 높이기
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(2.0)
+        # 4. 이진화 (160 기준)
+        img = img.point(lambda x: 0 if x < 160 else 255, '1')
+        return img.convert("RGB")
+
+    image_texts = []
+    rels = doc.part._rels
+    for rel in rels:
+        rel_obj = rels[rel]
+        if "image" in rel_obj.target_ref:
+            image_data = rel_obj.target_part.blob
+            img = Image.open(io.BytesIO(image_data))
+            preprocessed_img = preprocess_image_for_ocr(img)
+
+            ocr_result = pytesseract.image_to_string(preprocessed_img, lang="kor+eng", config="--oem 3 --psm 6")
+
+            if ocr_result.strip():
+                image_texts.append("\n이미지 OCR 결과")
+                image_texts.append(ocr_result.strip())
+
+    if image_texts:
+        full_text.append("\n".join(image_texts))
+
+    return "\n".join(full_text)
+
+text = extract_text_from_docx(docx_path)
+print("추출된 Word 텍스트:\n")
+print(text)
