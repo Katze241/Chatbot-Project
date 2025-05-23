@@ -1,0 +1,33 @@
+# png, jpg 이미지 전처리 후 텍스트 추출
+from google.colab import files
+from PIL import Image, ImageOps, ImageEnhance
+import pytesseract
+import cv2
+import numpy as np
+import io
+
+uploaded = files.upload()
+image_path = list(uploaded.keys())[0]
+
+def preprocess_image(image_path):
+    # 1. 흑백 변환
+    img = Image.open(image_path).convert("L")
+
+    # 2. 리사이징 (텍스트가 작을 경우 확대)
+    img = img.resize((int(img.width * 2), int(img.height * 2)))
+
+    # 3. 대비 높이기
+    enhancer = ImageEnhance.Contrast(img)
+    img = enhancer.enhance(3.0)
+
+    # 4. 이진화 (thresholding)
+    img = img.point(lambda x: 0 if x < 100 else 255, '1')
+
+    return img.convert("RGB")
+
+img = preprocess_image(image_path)
+custom_config = r'--oem 3 --psm 6'
+text = pytesseract.image_to_string(img, lang='kor+eng', config=custom_config)
+
+print("이미지 OCR 추출 결과 : \n")
+print(text)
