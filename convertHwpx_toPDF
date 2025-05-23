@@ -1,0 +1,73 @@
+# 초반 프롬포트에 따른 출력용으로 만들어져서 필요없는 코드가 포함되어 있음
+from pdf2image import convert_from_path
+from PIL import Image, ImageOps
+import pytesseract
+import json
+import re
+from google.colab import files
+
+uploaded = files.upload()
+pdf_path = list(uploaded.keys())[0]
+
+pages = convert_from_path(pdf_path, dpi=500)
+img_path = "meeting_temp.png"
+pages[0].save(img_path, "PNG")
+
+def preprocess_image(img_path):
+    img = Image.open(img_path).convert("L")  # 흑백
+    img = ImageOps.invert(img)              # 흰 배경 + 검은 글자
+    img = img.resize((int(img.width * 1.5), int(img.height * 1.5)))
+    img = img.point(lambda x: 0 if x < 128 else 255, '1')  # 이진화
+    return img
+
+def clean_ocr_text(raw_text):
+    cleaned_lines = []
+    for line in raw_text.split("\n"):
+        line = line.strip()
+        line = re.sub(r"[^가-힣a-zA-Z0-9 ()~:\-.,]", "", line)
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines)
+
+def extract_meeting_info(text):
+    lines = text.split("\n")
+    info = {
+        "date": "",
+        "time": "",
+        "location": "비대면",
+        "participants": [],
+        "topic": "정기 회의",
+        "agenda": []
+    }
+
+    for line in lines:
+        # 날짜 + 시간 추출
+        if re.search(r"20\d{6}", line):
+            match = re.search(r"(20\d{6})\s+(\d{1,2}:\d{2}~\d{1,2}:\d{2})", line)
+            if match:
+                info["date"] = f"{match.group(1)[:4]}-{match.group(1)[4:6]}-{match.group(1)[6:]}"
+                info["time"] = match.group(2)
+        # 아젠다 항목 키워드 기반 추출
+        elif any(kw in line for kw in ["모델", "오픈소스", "음성데이터", "프롬프트", "철도", "스터디", "코드", "집중근무", "논의", "자료"]):
+            info["agenda"].append(line.strip())
+
+    return info
+
+img = preprocess_image(img_path)
+custom_config = r'--oem 3 --psm 6'
+text = pytesseract.image_to_string(img, lang="kor+eng", config=custom_config)
+text = clean_ocr_text(text)
+
+record = {
+    "file_name": img_path,
+    "ground_truth": extract_meeting_info(text)
+}
+with open("metadata.jsonl", "w", encoding="utf-8") as f:
+    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+print(" OCR 결과 (정제 후):\n")
+print(text)
+
+print("\n JSONL 변환 결과:")
+print(json.dumps(record, indent=2, ensure_ascii=False))
+
+files.download("metadata.jsonl")
