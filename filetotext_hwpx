@@ -17,47 +17,65 @@ def preprocess_image(img):
     img = img.point(lambda x: 0 if x < 140 else 255, '1')
     return img.convert("RGB")
 
-def extract_text_hwpx(hwpx_path):
+def extract_text_hwpx(hwpx_path: str) -> str:
     all_text = []
     with zipfile.ZipFile(hwpx_path, 'r') as zipf:
-        if "Contents/section0.xml" not in zipf.namelist():
-            print("Error")
-            return ""
+        # section0.xml 읽기
+        xml_name = "Contents/section0.xml"
+        if xml_name not in zipf.namelist():
+            raise FileNotFoundError(f"{xml_name} not found.")
+        root = ET.fromstring(zipf.read(xml_name))
 
-        xml_data = zipf.read("Contents/section0.xml")
-        root = ET.fromstring(xml_data)
-        ns = {'h': 'http://www.hancom.co.kr/hwpml/2010'}
-
+        # 1) 단락 추출
         for elem in root.iter():
-            tag = elem.tag.split('}')[-1]
-            if tag == 'p':  # 단락 텍스트
-                text = ''.join(t for t in elem.itertext()).strip()
-                if text:
-                    all_text.append(text)
-            elif tag == 'tbl':  # 표 텍스트
+            tag = elem.tag.rsplit('}',1)[-1]
+            if tag != 'p':
+                continue
+            txt = ''.join(elem.itertext()).strip()
+            if txt:
+                all_text.append(txt)
+
+        # 2) 테이블 추출 (namespace 무시)
+        for elem in root.iter():
+            if elem.tag.split('}')[-1] == 'tbl':
                 all_text.append("[표 시작]")
-                for tr in elem.findall('h:tr', ns):
-                    row_cells = []
-                    for tc in tr.findall('h:tc', ns):
-                        cell_text = ''.join(t for t in tc.itertext()).strip()
-                        row_cells.append(cell_text)
-                    all_text.append(' | '.join(row_cells))
+                # 각 tr
+                for tr in elem:
+                    if tr.tag.split('}')[-1] != 'tr':
+                        continue
+                    cells = []
+                    for tc in tr:
+                        if tc.tag.split('}')[-1] != 'tc':
+                            continue
+                        # 각 tc 내의 모든 p 텍스트 합치기
+                        paras = []
+                        for node in tc.iter():
+                            if node.tag.split('}')[-1] == 'p':
+                                t = ''.join(node.itertext()).strip()
+                                if t:
+                                    paras.append(t)
+                        cells.append(' '.join(paras) or "__")
+                    all_text.append('\t'.join(cells))
                 all_text.append("[표 끝]")
 
-        # 이미지(미완성)
-        image_files = [f for f in zipf.namelist() if f.startswith("Resources/Images/") and f.lower().endswith((".png", ".jpeg", ".jpg"))]
-
-        for image_file in image_files:
-            image_data = zipf.read(image_file)
-            img = Image.open(io.BytesIO(image_data))
-            preprocessed_img = preprocess_image(img)
-            ocr_text = pytesseract.image_to_string(preprocessed_img, lang="kor+eng", config="--oem 3 --psm 6")
-            if ocr_text.strip():
-                all_text.append(f"[이미지 OCR: {image_file}]")
-                all_text.append(ocr_text.strip())
+        # 이미지 OCR
+        for fname in zipf.namelist():
+            if fname.startswith("Resources/Images/") and fname.lower().endswith((".png",".jpg",".jpeg")):
+                img = Image.open(io.BytesIO(zipf.read(fname)))
+                ocr = pytesseract.image_to_string(preprocess_image(img), lang="kor+eng",
+                                                   config="--oem 3 --psm 6").strip()
+                if ocr:
+                    all_text.append(f"[이미지 OCR: {fname}]")
+                    all_text.append(ocr)
 
     return "\n".join(all_text)
+
 
 text = extract_text_hwpx(hwpx_path)
 print("추출된 텍스트:\n")
 print(text)
+
+md_filename = 'text.md'
+with open(md_filename, 'w', encoding='utf-8') as f:
+    f.write(text)
+files.download(md_filename)
