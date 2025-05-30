@@ -2,6 +2,8 @@ from PIL import Image
 from docx import Document
 from google.colab import files
 from PIL import Image, ImageOps, ImageEnhance
+import re
+import pandas as pd
 import pytesseract
 import io
 import os
@@ -19,12 +21,27 @@ def extract_text_from_docx(docx_path):
             full_text.append(para.text.strip())
 
     print("\n")
-    # 표 (병합된 셀일 경우 병합된 개수만큼 계속해서 텍스트가 출력됨)
-    for table in doc.tables:
+    # 표를 Markdown 테이블로 변환
+    for tbl_idx, table in enumerate(doc.tables, start=1):
+        # 1) 셀 텍스트 수집 및 whitespace collapse
+        data = []
         for row in table.rows:
-            row_text = [cell.text.strip() for cell in row.cells if cell.text.strip()]
-            if row_text:
-                full_text.append(" | ".join(row_text))
+            row_cells = []
+            for cell in row.cells:
+                txt = cell.text.strip()
+                txt = re.sub(r'\s+', ' ', txt)   # 줄바꿈·다중공백 → 한 칸
+                row_cells.append(txt)
+            data.append(row_cells)
+
+        if not data:
+            continue
+
+        # 2) DataFrame으로 변환
+        df = pd.DataFrame(data[1:], columns=data[0])
+
+        # 3) Markdown으로 삽입 (원하면 to_string 으로 plain ASCII 테이블도 가능)
+        full_text.append(f"\n**테이블 {tbl_idx}**")
+        full_text.append(df.to_markdown(index=False))
 
     # 이미지
     def preprocess_image_for_ocr(img):
@@ -62,3 +79,8 @@ def extract_text_from_docx(docx_path):
 text = extract_text_from_docx(docx_path)
 print("추출된 Word 텍스트:\n")
 print(text)
+
+md_filename = 'text.md'
+with open(md_filename, 'w', encoding='utf-8') as f:
+    f.write(text)
+files.download(md_filename)
