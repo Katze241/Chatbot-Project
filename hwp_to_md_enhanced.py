@@ -78,7 +78,8 @@ def extract_sections_from_hwpx(hwpx_path: str) -> List[ET.Element]:
     with zipfile.ZipFile(hwpx_path, 'r') as z:
         section_files = [name for name in z.namelist() 
                         if name.startswith("Contents/section") and name.endswith('.xml')]
-        section_files.sort()  # 순서대로 처리
+        # 섹션 파일들을 번호순으로 정렬 (문자열 정렬이 아닌 숫자 정렬)
+        section_files.sort(key=lambda x: int(x.split('section')[1].split('.')[0]))
         
         for section_file in section_files:
             try:
@@ -271,60 +272,63 @@ def extract_paragraph_text(elem: ET.Element) -> str:
 
 
 def process_section_in_order(section: ET.Element, table_counter: Dict[str, int]) -> List[str]:
-    """섹션에서 문단과 표를 원래 순서대로 처리 (중복 방지)"""
+    """섹션에서 문단과 표를 원래 순서대로 처리 (중복 방지, 순서 수정)"""
     content_lines = []
+    processed_tables = set()  # 이미 처리된 표 추적
     
-    # 섹션의 모든 하위 요소들을 순서대로 순회
-    def process_element(elem: ET.Element) -> bool:
-        """요소를 처리하고 하위 요소 처리 여부를 반환"""
-        tag = elem.tag
-        if '}' in tag:
-            tag = tag.split('}')[1]
-        
-        if tag.lower() == 'p':
-            # 문단 처리 전에 하위에 표가 있는지 확인
-            has_table = False
-            for descendant in elem.iter():
-                desc_tag = descendant.tag
-                if '}' in desc_tag:
-                    desc_tag = desc_tag.split('}')[1]
-                if desc_tag.lower() == 'tbl':
-                    has_table = True
-                    break
+    def get_element_id(elem: ET.Element) -> str:
+        """요소의 고유 ID 생성"""
+        return str(id(elem))
+    
+    def process_elements_sequentially(parent_elem: ET.Element) -> None:
+        """부모 요소의 직접적인 자식들을 순서대로 처리"""
+        for child in parent_elem:
+            tag = child.tag
+            if '}' in tag:
+                tag = tag.split('}')[1]
             
-            if not has_table:
-                # 표가 없는 문단만 텍스트로 추출
-                para_text = extract_paragraph_text(elem)
-                if para_text and para_text.strip():
-                    content_lines.append(para_text)
-                    content_lines.append("")  # 문단 간 빈 줄
+            if tag.lower() == 'p':
+                # 문단 내 표들 먼저 처리
+                tables_in_paragraph = child.findall('.//hp:tbl', NAMESPACES)
+                if tables_in_paragraph:
+                    for table_elem in tables_in_paragraph:
+                        table_id = get_element_id(table_elem)
+                        if table_id not in processed_tables:
+                            table_data = extract_table_data(table_elem)
+                            if table_data:
+                                table_counter['count'] += 1
+                                table_md = format_table_as_markdown(table_data, table_counter['count'])
+                                if table_md:
+                                    content_lines.append(table_md)
+                                processed_tables.add(table_id)
+                else:
+                    # 표가 없는 문단만 텍스트로 추출
+                    para_text = extract_paragraph_text(child)
+                    if para_text and para_text.strip():
+                        content_lines.append(para_text)
+                        content_lines.append("")  # 문단 간 빈 줄
+                
+                # 하위 요소들도 재귀적으로 처리
+                process_elements_sequentially(child)
             
-            return True  # 하위 요소 계속 처리
-        
-        elif tag.lower() == 'tbl':
-            # 표 처리
-            table_data = extract_table_data(elem)
-            if table_data:
-                table_counter['count'] += 1
-                table_md = format_table_as_markdown(table_data, table_counter['count'])
-                if table_md:
-                    content_lines.append(table_md)
-            return False  # 표 내부는 더 이상 처리하지 않음 (중복 방지)
-        
-        return True  # 기타 요소는 하위 요소 계속 처리
+            elif tag.lower() == 'tbl':
+                # 독립적인 표 처리 (중복 방지)
+                table_id = get_element_id(child)
+                if table_id not in processed_tables:
+                    table_data = extract_table_data(child)
+                    if table_data:
+                        table_counter['count'] += 1
+                        table_md = format_table_as_markdown(table_data, table_counter['count'])
+                        if table_md:
+                            content_lines.append(table_md)
+                        processed_tables.add(table_id)
+            
+            else:
+                # 기타 요소들은 하위 요소 계속 처리
+                process_elements_sequentially(child)
     
-    def traverse_elements(elem: ET.Element) -> None:
-        """요소를 재귀적으로 순회하되 표 내부는 건너뜀"""
-        should_process_children = process_element(elem)
-        
-        if should_process_children:
-            # 하위 요소들도 재귀적으로 처리
-            for child in elem:
-                traverse_elements(child)
-    
-    # 섹션의 모든 하위 요소 처리
-    for child in section:
-        traverse_elements(child)
+    # 섹션의 모든 직접 자식 요소들을 순서대로 처리
+    process_elements_sequentially(section)
     
     return content_lines
 
