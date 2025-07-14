@@ -270,8 +270,67 @@ def extract_paragraph_text(elem: ET.Element) -> str:
     return safe_spacing(paragraph)
 
 
+def process_section_in_order(section: ET.Element, table_counter: Dict[str, int]) -> List[str]:
+    """섹션에서 문단과 표를 원래 순서대로 처리 (중복 방지)"""
+    content_lines = []
+    
+    # 섹션의 모든 하위 요소들을 순서대로 순회
+    def process_element(elem: ET.Element) -> bool:
+        """요소를 처리하고 하위 요소 처리 여부를 반환"""
+        tag = elem.tag
+        if '}' in tag:
+            tag = tag.split('}')[1]
+        
+        if tag.lower() == 'p':
+            # 문단 처리 전에 하위에 표가 있는지 확인
+            has_table = False
+            for descendant in elem.iter():
+                desc_tag = descendant.tag
+                if '}' in desc_tag:
+                    desc_tag = desc_tag.split('}')[1]
+                if desc_tag.lower() == 'tbl':
+                    has_table = True
+                    break
+            
+            if not has_table:
+                # 표가 없는 문단만 텍스트로 추출
+                para_text = extract_paragraph_text(elem)
+                if para_text and para_text.strip():
+                    content_lines.append(para_text)
+                    content_lines.append("")  # 문단 간 빈 줄
+            
+            return True  # 하위 요소 계속 처리
+        
+        elif tag.lower() == 'tbl':
+            # 표 처리
+            table_data = extract_table_data(elem)
+            if table_data:
+                table_counter['count'] += 1
+                table_md = format_table_as_markdown(table_data, table_counter['count'])
+                if table_md:
+                    content_lines.append(table_md)
+            return False  # 표 내부는 더 이상 처리하지 않음 (중복 방지)
+        
+        return True  # 기타 요소는 하위 요소 계속 처리
+    
+    def traverse_elements(elem: ET.Element) -> None:
+        """요소를 재귀적으로 순회하되 표 내부는 건너뜀"""
+        should_process_children = process_element(elem)
+        
+        if should_process_children:
+            # 하위 요소들도 재귀적으로 처리
+            for child in elem:
+                traverse_elements(child)
+    
+    # 섹션의 모든 하위 요소 처리
+    for child in section:
+        traverse_elements(child)
+    
+    return content_lines
+
+
 def process_section(section: ET.Element) -> Tuple[List[str], List[List[List[str]]]]:
-    """섹션에서 문단과 표를 분리하여 처리"""
+    """기존 호환성을 위한 래퍼 함수 (더 이상 사용되지 않음)"""
     paragraphs = []
     tables = []
     
@@ -291,39 +350,21 @@ def process_section(section: ET.Element) -> Tuple[List[str], List[List[List[str]
 
 
 def convert_to_markdown(hwpx_path: str) -> str:
-    """HWPX 파일을 마크다운으로 변환"""
+    """HWPX 파일을 마크다운으로 변환 (원래 순서 보존)"""
     sections = extract_sections_from_hwpx(hwpx_path)
     
     if not sections:
         raise ValueError("섹션을 찾을 수 없습니다.")
     
-    all_paragraphs = []
-    all_tables = []
+    all_content_lines = []
+    table_counter = {'count': 0}  # 전체 문서에서 표 번호 카운터
     
-    # 각 섹션 처리
+    # 각 섹션을 순서대로 처리
     for section in sections:
-        paragraphs, tables = process_section(section)
-        all_paragraphs.extend(paragraphs)
-        all_tables.extend(tables)
+        section_content = process_section_in_order(section, table_counter)
+        all_content_lines.extend(section_content)
     
-    # 마크다운 생성
-    md_lines = []
-    
-    # 문단들 추가
-    for para in all_paragraphs:
-        md_lines.append(para)
-        md_lines.append("")  # 문단 간 빈 줄
-    
-    # 표 목록 섹션 추가
-    if all_tables:
-        md_lines.extend(["", "## 표 목록", ""])
-        
-        for i, table_data in enumerate(all_tables, 1):
-            table_md = format_table_as_markdown(table_data, i)
-            if table_md:
-                md_lines.append(table_md)
-    
-    return '\n'.join(md_lines)
+    return '\n'.join(all_content_lines)
 
 
 def convert_hwp_to_markdown(input_path: str, output_path: str):
