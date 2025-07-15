@@ -41,11 +41,11 @@ def safe_spacing(text: str) -> str:
 def clean_cell_text(text: str) -> str:
     """셀 텍스트 정리 - 빈 셀 처리 개선"""
     if not text:
-        return "&nbsp;"
+        return " --- "
     
     cleaned = safe_spacing(text)
     if not cleaned or cleaned.lower() == 'none':
-        return "&nbsp;"
+        return " --- "
     
     return cleaned
 
@@ -156,7 +156,7 @@ def extract_table_data(table_elem: ET.Element) -> List[List[str]]:
         result_row = []
         for cell in row:
             if cell is None:
-                result_row.append("&nbsp;")
+                result_row.append(" --- ")
             else:
                 result_row.append(clean_cell_text(cell))
         result.append(result_row)
