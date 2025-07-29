@@ -235,6 +235,45 @@ def simple_pipeline(
     print("[3/3] 최종 답변 생성 완료!")
     return answer
 
+def compress_documents_batch(query: str, contexts: List[str], llm_cheap) -> List[str]:
+    """
+    LLM의 batch 기능을 이용해 여러 large chunk를 한 번에 압축합니다.
+    """
+    prompt = PromptTemplate(
+        input_variables=["question", "context"],
+        template="""
+        You are a helpful AI assistant that ALWAYS responds in Korean. 당신은 항상 한국어로 답변하는 AI 어시스턴트입니다.
+        [역할]
+    당신은 문맥(Context)에서 특정 질문(Question)에 대한 답변의 근거가 되는 문장을 **원문 그대로** 찾아내는 고정밀 텍스트 추출 엔진입니다. 당신은 아래 [예시]와 [절대 규칙]에 따라 [실제 작업]을 수행해야 합니다.
+
+    [절대 규칙]
+    1.  **요약 금지:** 절대 문장을 요약하거나 자신의 언어로 재작성하지 마세요.
+    2.  **변경 금지:** 단어 하나도 추가하거나 빼거나 바꾸지 마세요.
+    3.  **의견 금지:** 당신의 의견, 부연 설명, 인사말 등 다른 어떤 텍스트도 포함하지 마세요.
+    4.  **정보 부재 시:** 만약 [문맥]에 [질문]에 답할 정보가 전혀 없다면, 다른 말 없이 정확히 **[관련 내용 없음]** 이라고만 출력해야 합니다.
+    ---
+
+    [실제 작업]
+    [문맥]
+    {context}
+
+    [질문]
+    {question}
+
+    [추출된 문장]
+        """
+    )
+    chain = LLMChain(llm=llm_cheap, prompt=prompt)
+    
+    # batch 처리를 위한 입력 데이터 구성
+    batch_inputs = [{"context": ctx, "question": query} for ctx in contexts]
+    
+    # batch 실행
+    results = chain.batch(batch_inputs)
+    
+    # 결과에서 'text'만 추출하여 리스트로 반환
+    return [result['text'] for result in results]
+
 def complex_pipeline(
     query: str,
     retrieved_small_docs: List[Document], 
@@ -243,9 +282,10 @@ def complex_pipeline(
     llm_cheap,
     llm_powerful,
     top_k: int = 10,
-    rerank_n: int = 3
+    rerank_n: int = 3,
+    use_batch: bool = False
 ) -> str:
-    """복잡 파이프라인 (online_pipeline_collection.py 기반)"""
+    """복잡 파이프라인 (online_pipeline_collection.py 기반) + 배치 처리 옵션"""
     print(f"[1/5] 1차 검색 완료 (통합 검색된 small chunk 수: {len(retrieved_small_docs)})")
 
     keywords = extract_proper_nouns(query, max_keywords=5)
@@ -274,18 +314,46 @@ def complex_pipeline(
     print(f"[3/5] parent large chunk 추출 완료 (대상 large chunk 수: {len(parent_large_ids)})")
 
     print("[4/5] context 압축(핵심 문장 추출) 진행 중...")
-    compressed_contexts = []
-    for idx, large_id in enumerate(parent_large_ids):
-        if large_id in large_chunk_dict:
-            print(f"      - [{idx+1}/{len(parent_large_ids)}] large chunk({large_id}) 압축 중...")
-            large_doc = large_chunk_dict[large_id]
-            compressed = compress_document_context(query, large_doc.page_content, llm_cheap)
-            if compressed.strip() and "관련 내용 없음" not in compressed:
-                compressed_contexts.append(compressed)
-                print(f"        [압축 결과]\n{compressed}\n")
-            else:
-                print(f"        [압축 결과 없음 또는 관련 내용 없음]")
-            print(f"      - [{idx+1}/{len(parent_large_ids)}] large chunk({large_id}) 압축 완료")
+    
+    if use_batch and len(parent_large_ids) > 1:
+        # 배치 처리 모드
+        print(f"    - 배치 처리 모드: {len(parent_large_ids)}개의 large chunk를 한 번에 압축합니다...")
+        contexts_to_compress = []
+        for large_id in parent_large_ids:
+            if large_id in large_chunk_dict:
+                contexts_to_compress.append(large_chunk_dict[large_id].page_content)
+        
+        if contexts_to_compress:
+            batch_results = compress_documents_batch(query, contexts_to_compress, llm_cheap)
+            
+            # 유효한 결과만 필터링
+            compressed_contexts = []
+            for idx, res in enumerate(batch_results):
+                if res.strip() and "관련 내용 없음" not in res:
+                    compressed_contexts.append(res)
+                    print(f"        [배치 압축 결과 {idx+1}]\n{res}\n")
+                else:
+                    print(f"        [배치 압축 결과 {idx+1} - 관련 내용 없음]")
+            print(f"    - 배치 압축 완료.")
+        else:
+            compressed_contexts = []
+            print("    - 압축할 컨텍스트가 없습니다.")
+    else:
+        # 개별 처리 모드 (기존 방식)
+        print(f"    - 개별 처리 모드: {len(parent_large_ids)}개의 large chunk를 순차적으로 압축합니다...")
+        compressed_contexts = []
+        for idx, large_id in enumerate(parent_large_ids):
+            if large_id in large_chunk_dict:
+                print(f"      - [{idx+1}/{len(parent_large_ids)}] large chunk({large_id}) 압축 중...")
+                large_doc = large_chunk_dict[large_id]
+                compressed = compress_document_context(query, large_doc.page_content, llm_cheap)
+                if compressed.strip() and "관련 내용 없음" not in compressed:
+                    compressed_contexts.append(compressed)
+                    print(f"        [압축 결과]\n{compressed}\n")
+                else:
+                    print(f"        [압축 결과 없음 또는 관련 내용 없음]")
+                print(f"      - [{idx+1}/{len(parent_large_ids)}] large chunk({large_id}) 압축 완료")
+    
     context = "\n---\n".join(compressed_contexts)
     print(f"[4/5] context 압축 완료 (압축된 context 블록 수: {len(compressed_contexts)})")
 
@@ -312,6 +380,22 @@ def print_pipeline_menu():
     print("   - 더 정확하고 집중된 답변")
     print("="*60)
 
+def print_compression_menu():
+    """압축 방식 선택 메뉴 출력"""
+    print("\n" + "-"*50)
+    print("압축 처리 방식 선택")
+    print("-"*50)
+    print("1️. 개별 처리 (안정적)")
+    print("   - 각 large chunk를 순차적으로 처리")
+    print("   - 메모리 사용량 적음")
+    print("   - 안정적인 처리")
+    print()
+    print("2️. 배치 처리 (빠름)")
+    print("   - 여러 large chunk를 한 번에 처리")
+    print("   - 처리 속도 향상")
+    print("   - 메모리 사용량 증가")
+    print("-"*50)
+
 def get_user_choice() -> int:
     """사용자 선택 입력 받기"""
     while True:
@@ -325,9 +409,12 @@ def get_user_choice() -> int:
             print("숫자를 입력해주세요.")
 
 def get_user_query() -> str:
-    """사용자 질문 입력 받기"""
+    """사용자 질문 설정 (코드 내에서 직접 설정)"""
+    # 여기서 질문을 직접 설정하세요
+    query = "테러가 의심되는 '코드 블랙' 상황에 대응하기 위해 매뉴얼이 개정되었다고 하는데, 언제 누가 개정한 건가요?"
+    
     print("\n" + "-"*50)
-    query = input("💬 질문을 입력하세요: ")
+    print(f"설정된 질문: {query}")
     return query.strip()
 
 # --- main 실행부 ---
@@ -357,7 +444,7 @@ if __name__ == "__main__":
     query = get_user_query()
     
     if not query:
-        print("❌ 질문을 입력해주세요.")
+        print("[오류] 질문을 입력해주세요.")
         exit()
 
     # 4. 파이프라인별 실행
@@ -403,6 +490,11 @@ if __name__ == "__main__":
         print(f"   (질문: {query})")
         print("="*50 + "\n")
         
+        # 압축 방식 선택 (복잡 파이프라인에서만)
+        print_compression_menu()
+        compression_choice = get_user_choice()
+        use_batch = (compression_choice == 2)
+        
         start_time = time.time()
         
         # 모든 컬렉션에서 검색 수행
@@ -427,7 +519,7 @@ if __name__ == "__main__":
         with open(LARGE_CHUNK_PICKLE, 'rb') as f:
             large_chunk_dict: Dict[str, Document] = pickle.load(f)
         
-        # 복잡 파이프라인 실행
+        # 복잡 파이프라인 실행 (배치 처리 옵션 포함)
         final_answer = complex_pipeline(
             query=query,
             retrieved_small_docs=unique_retrieved_docs,
@@ -436,7 +528,8 @@ if __name__ == "__main__":
             llm_cheap=llm_cheap,
             llm_powerful=llm_powerful,
             top_k=10, 
-            rerank_n=3
+            rerank_n=3,
+            use_batch=use_batch
         )
     
     end_time = time.time()
