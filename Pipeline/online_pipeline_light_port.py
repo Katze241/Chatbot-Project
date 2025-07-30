@@ -38,11 +38,11 @@ from konlpy.tag import Komoran
 # 임베딩 모델
 embedding_model = HuggingFaceEmbeddings(
     model_name="BAAI/bge-m3",
-    model_kwargs={'device': 'cpu'}, # GPU 사용 시 'cuda'로 변경
+    model_kwargs={'device': 'cuda'},
     encode_kwargs={'normalize_embeddings': True}
 )
 # 재순위화 모델
-reranker_model = CrossEncoder('BAAI/bge-reranker-large', device='cpu') # GPU 사용 시 'cuda'로 변경
+reranker_model = CrossEncoder('BAAI/bge-reranker-large', device='cuda')
 
 # LLM 정의 (Ollama 사용)
 llm_cheap = Ollama(model="qwen2:7b")  # 답변 생성용 (빠르고 효율적)
